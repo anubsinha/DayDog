@@ -1,2 +1,2 @@
-# DayDog
+# Daily Logger
 Activity Logger
