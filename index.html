@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Daily Logger</title>
+  <meta charset="UTF-8">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/moment"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment"></script>
+  <style>
+    body {
+      font-family: -apple-system, sans-serif;
+      margin: 20px;
+      background: #f5f5f5;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    .input-section,
+    .chart-section {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    input,
+    select,
+    button {
+      margin: 10px;
+      padding: 8px;
+      border-radius: 4px;
+    }
+
+    button {
+      background: #007AFF;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+
+    .chart-container {
+      height: 400px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="input-section">
+      <h2>Log Activity</h2>
+      <input type="text" id="activity" placeholder="Activity name">
+      <select id="category">
+        <option value="work">Work</option>
+        <option value="personal">Personal</option>
+        <option value="exercise">Exercise</option>
+        <option value="learning">Learning</option>
+      </select>
+      <input type="time" id="startTime" required>
+      <input type="time" id="endTime" required>
+      <button onclick="logActivity()">Log Activity</button>
+    </div>
+
+    <div class="chart-section">
+      <h2>Activity Analysis</h2>
+      <button onclick="showChart('category')">By Category</button>
+      <button onclick="showChart('activity')">By Activity</button>
+      <button onclick="showChart('timeline')">Timeline</button>
+      <div class="chart-container">
+        <canvas id="mainChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    let currentChart = null;
+
+    function calculateDuration(startTime, endTime) {
+      const [startHours, startMinutes] = startTime.split(':').map(Number);
+      const [endHours, endMinutes] = endTime.split(':').map(Number);
+      let durationMinutes = (endHours * 60 + endMinutes) - (startHours * 60 + startMinutes);
+      if (durationMinutes < 0) durationMinutes += 24 * 60;
+      return durationMinutes;
+    }
+
+    async function logActivity() {
+      const activity = {
+        name: document.getElementById('activity').value,
+        category: document.getElementById('category').value,
+        startTime: document.getElementById('startTime').value,
+        endTime: document.getElementById('endTime').value
+      };
+
+      activity.duration = calculateDuration(activity.startTime, activity.endTime);
+
+      await ipcRenderer.invoke('log-activity', activity);
+
+      // Clear inputs
+      document.getElementById('activity').value = '';
+      document.getElementById('startTime').value = '';
+      document.getElementById('endTime').value = '';
+
+      // Refresh current chart
+      showChart(currentChartType);
+    }
+
+    let currentChartType = 'category';
+
+    async function showChart(type) {
+      currentChartType = type;
+      const activities = await ipcRenderer.invoke('get-activities');
+
+      if (currentChart) {
+        currentChart.destroy();
+        currentChart = null;
+      }
+
+      const ctx = document.getElementById('mainChart').getContext('2d');
+
+      switch (type) {
+        case 'category':
+          createCategoryChart(ctx, activities);
+          break;
+        case 'activity':
+          createActivityChart(ctx, activities);
+          break;
+        case 'timeline':
+          createTimelineChart(ctx, activities);
+          break;
+      }
+    }
+
+    function createCategoryChart(ctx, activities) {
+      const categoryData = {};
+      activities.forEach(activity => {
+        if (!categoryData[activity.category]) {
+          categoryData[activity.category] = 0;
+        }
+        categoryData[activity.category] += activity.duration;
+      });
+
+      currentChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: Object.keys(categoryData),
+          datasets: [{
+            data: Object.values(categoryData),
+            backgroundColor: ['#FF9500', '#007AFF', '#4CD964', '#FF2D55']
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false
+        }
+      });
+    }
+
+    function createActivityChart(ctx, activities) {
+      const activityData = {};
+      activities.forEach(activity => {
+        if (!activityData[activity.name]) {
+          activityData[activity.name] = 0;
+        }
+        activityData[activity.name] += activity.duration;
+      });
+
+      currentChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: Object.keys(activityData),
+          datasets: [{
+            label: 'Minutes Spent',
+            data: Object.values(activityData),
+            backgroundColor: '#007AFF'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y'
+        }
+      });
+    }
+
+    function createTimelineChart(ctx, activities) {
+      const today = new Date().toISOString().split('T')[0];
+      const sortedActivities = [...activities].sort((a, b) =>
+        new Date(`${today}T${a.startTime}`) - new Date(`${today}T${b.startTime}`)
+      );
+
+      const labels = sortedActivities.map(a => a.name);
+      const data = sortedActivities.map(a => ({
+        x: `${today}T${a.startTime}`,
+        y: labels.indexOf(a.name)
+      }));
+
+      currentChart = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Activities',
+            data: data,
+            backgroundColor: sortedActivities.map(a => {
+              switch (a.category) {
+                case 'work': return '#FF9500';
+                case 'personal': return '#007AFF';
+                case 'exercise': return '#4CD964';
+                case 'learning': return '#FF2D55';
+                default: return '#007AFF';
+              }
+            }),
+            pointStyle: 'rect',
+            pointRadius: 10,
+            pointHoverRadius: 12
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: 'time',
+              time: {
+                unit: 'hour',
+                parser: 'ISO',
+                displayFormats: {
+                  hour: 'HH:mm'
+                }
+              },
+              min: `${today}T00:00:00`,
+              max: `${today}T23:59:59`,
+              title: {
+                display: true,
+                text: 'Time'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Activities'
+              },
+              ticks: {
+                callback: function (value) {
+                  return labels[value];
+                }
+              }
+            }
+          },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: function (context) {
+                  const activity = sortedActivities[context.dataIndex];
+                  return [
+                    `Activity: ${activity.name}`,
+                    `Time: ${activity.startTime} - ${activity.endTime}`,
+                    `Duration: ${activity.duration} minutes`
+                  ];
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // Show initial chart
+    showChart('category');
+  </script>
+</body>
+
+</html>
